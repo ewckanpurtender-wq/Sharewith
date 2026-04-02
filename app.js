@@ -91,6 +91,15 @@ function handleConnection(conn) {
     
     conn.on('open', () => {
         console.log("Connection established with:", conn.peer);
+        // If we have a file ready to send, initiate the metadata exchange
+        if (currentFileData) {
+            conn.send({
+                type: 'metadata',
+                name: currentFileData.name,
+                size: currentFileData.size
+            });
+            showToast("Connected! Sending file request...");
+        }
     });
 
     conn.on('data', (data) => {
@@ -186,12 +195,13 @@ function tick() {
             showToast("ID Found! Connecting...");
             targetIdInput.value = code.data;
             stopScanner();
+            
+            // Smarter redirection/action based on state
             if (currentFileData) {
                 initiateSend(code.data);
             } else {
-                showToast("ID Loaded. Now select a file.");
-                // Switch to Send tab if in Receive
-                tabBtns[0].click();
+                // If no file, assume we are receiving
+                initiateReceive(code.data);
             }
         }
     }
@@ -241,13 +251,22 @@ function prepareToSend(file) {
     fileNameText.textContent = file.name;
     fileSizeText.textContent = formatBytes(file.size);
     
-    // In "Send" mode, we need a Target ID to connect
-    // If we're not connected yet, show instructions
+    // Switch UI to show file is selected
+    const dropZoneIcon = dropZone.querySelector('.drop-icon');
+    const dropZoneText = dropZone.querySelector('p');
+    
+    if (dropZoneIcon && dropZoneText) {
+        dropZoneIcon.setAttribute('data-lucide', 'check-circle-2');
+        dropZoneIcon.className = 'drop-icon success-pulse';
+        dropZoneText.innerHTML = `Ready to send: <span class="gradient-text">${file.name}</span><br><small>${formatBytes(file.size)}</small>`;
+        lucide.createIcons();
+    }
+
     const targetId = targetIdInput.value.trim();
     if (targetId) {
         initiateSend(targetId);
     } else {
-        alert("Please enter the Receiver ID or use the Receive tab on the other device.");
+        showToast("File ready. Share your ID or scan the QR code.");
     }
 }
 
@@ -269,12 +288,7 @@ function initiateSend(targetId) {
             radarContainer.classList.add('hidden');
             transferInfo.classList.remove('hidden');
             transferTitle.textContent = "Requesting Access...";
-            // Send metadata first
-            conn.send({
-                type: 'metadata',
-                name: currentFileData.name,
-                size: currentFileData.size
-            });
+            // Metadata is already sent via handleConnection's 'open' listener
         });
         
         conn.on('error', () => {
@@ -284,7 +298,38 @@ function initiateSend(targetId) {
     }, 2000); // 2s of radar scanning
 }
 
+function initiateReceive(targetId) {
+    if (!peer) return;
+
+    transferZone.classList.remove('hidden');
+    radarContainer.classList.remove('hidden');
+    transferInfo.classList.add('hidden');
+    progressBarFill.style.width = '0%';
+    progressPercent.textContent = '0%';
+
+    setTimeout(() => {
+        const conn = peer.connect(targetId);
+        handleConnection(conn);
+
+        conn.on('open', () => {
+            radarContainer.classList.add('hidden');
+            transferInfo.classList.remove('hidden');
+            transferTitle.textContent = "Connecting to Host...";
+            // We are the receiver, we just wait for metadata.
+            // handleConnection will trigger the incoming modal when metadata arrives.
+        });
+
+        conn.on('error', () => {
+            showToast("Connection to Host Failed", "error");
+            transferZone.classList.add('hidden');
+        });
+    }, 1500);
+}
+
 function sendFileData() {
+    transferZone.classList.remove('hidden');
+    radarContainer.classList.add('hidden');
+    transferInfo.classList.remove('hidden');
     transferTitle.textContent = "Optimizing Route...";
     
     // Simulate some "Connecting" time for aesthetics
@@ -398,7 +443,7 @@ connectBtn.addEventListener('click', () => {
         if (currentFileData) {
             initiateSend(targetId);
         } else {
-            showToast("Please select a file to send first.");
+            initiateReceive(targetId);
         }
     } else {
         showToast("Enter the ID of the receiver.");

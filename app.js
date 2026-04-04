@@ -42,20 +42,23 @@ const cancelTransferBtn = document.getElementById('cancelTransferBtn');
 const toastContainer = document.getElementById('toastContainer');
 
 // --- PeerJS / P2P Logic ---
-let peer = null;
-let currentConn = null;
-let currentFileData = null;
-let currentFileName = "";
-let currentFileSize = 0;
-let receivedBlob = null;
-let scanning = false;
-let canvasElement = document.createElement("canvas");
-let canvas = canvasElement.getContext("2d", { willReadFrequently: true });
-
 const radarContainer = document.getElementById('radarAnimation');
 const transferInfo = document.getElementById('transferInfo');
 const methodIcons = document.querySelectorAll('.method-icon');
 const methodLabel = document.getElementById('methodLabel');
+
+// --- PeerJS / P2P Logic ---
+let peer = null;
+let currentConn = null;
+let currentFiles = []; // Array to store multiple files
+let currentFileIndex = 0;
+let receivedBlobs = []; // Array to store multiple received files
+let incomingFiles = []; // Array to store incoming file metadata
+let currentQrType = 'id';
+let myPeerId = '';
+let scanning = false;
+let canvasElement = document.createElement("canvas");
+let canvas = canvasElement.getContext("2d", { willReadFrequently: true });
 
 // Initialize Peer
 function initPeer() {
@@ -67,10 +70,11 @@ function initPeer() {
     });
 
     peer.on('open', (id) => {
+        myPeerId = id;
         myIdEl.textContent = id;
         statusDot.className = 'status-dot online';
         statusText.textContent = 'Ready to sync';
-        generateQR(id);
+        updateQR();
     });
 
     peer.on('error', (err) => {
@@ -91,41 +95,50 @@ function handleConnection(conn) {
     
     conn.on('open', () => {
         console.log("Connection established with:", conn.peer);
-        // If we have a file ready to send, initiate the metadata exchange
-        if (currentFileData) {
+        // If we have files ready to send, initiate the metadata exchange
+        if (currentFiles.length > 0) {
             conn.send({
-                type: 'metadata',
-                name: currentFileData.name,
-                size: currentFileData.size
+                type: 'metadata-batch',
+                files: currentFiles.map(f => ({ name: f.name, size: f.size }))
             });
-            showToast("Connected! Sending file request...");
+            showToast(`Connected! Requesting to send ${currentFiles.length} file(s)...`);
         }
     });
 
     conn.on('data', (data) => {
-        if (data.type === 'metadata') {
-            // Sender sent file info, ask for acceptance
-            currentFileName = data.name;
-            currentFileSize = data.size;
-            incomingFileInfo.textContent = `"${data.name}" (${formatBytes(data.size)})`;
+        if (data.type === 'metadata-batch') {
+            // Sender sent batch metadata, ask for acceptance
+            incomingFiles = data.files;
+            const totalSize = incomingFiles.reduce((acc, f) => acc + f.size, 0);
+            const names = incomingFiles.map(f => f.name).join(', ');
+            
+            incomingFileInfo.textContent = `${incomingFiles.length} Files: ${names.length > 40 ? names.substring(0, 37) + '...' : names} (${formatBytes(totalSize)})`;
             incomingModal.classList.remove('hidden');
-        } else if (data.type === 'file') {
-            // Sender sent the actual file after acceptance
-            receivedBlob = new Blob([data.buffer]);
-            const url = URL.createObjectURL(receivedBlob);
+        } else if (data.type === 'file-part') {
+            // Sender sent a single file in the batch
+            const blob = new Blob([data.buffer]);
+            const url = URL.createObjectURL(blob);
             
             // Auto download
             const a = document.createElement('a');
             a.href = url;
-            a.download = currentFileName;
+            a.download = data.name;
             a.click();
-            // We don't revokeObjectURL here immediately to allow manual download
             
-            showSuccess(`"${currentFileName}" has been received and saved.`, true);
-            transferZone.classList.add('hidden');
+            receivedBlobs.push({ name: data.name, blob: blob });
+            
+            const progress = Math.round(((data.index + 1) / incomingFiles.length) * 100);
+            updateProgress(progress);
+            
+            if (data.index === incomingFiles.length - 1) {
+                showSuccess(`${incomingFiles.length} file(s) received successfully.`, true);
+                transferZone.classList.add('hidden');
+            } else {
+                transferTitle.textContent = `Receiving (${data.index + 2}/${incomingFiles.length})...`;
+            }
         } else if (data.type === 'accept') {
-            // Receiver accepted, send the file
-            sendFileData();
+            // Receiver accepted, send all files
+            sendFileDataBatch();
         } else if (data.type === 'decline') {
             showToast("Transfer declined by receiver.", "error");
             transferZone.classList.add('hidden');
@@ -197,7 +210,7 @@ function tick() {
             stopScanner();
             
             // Smarter redirection/action based on state
-            if (currentFileData) {
+            if (currentFiles.length > 0) {
                 initiateSend(code.data);
             } else {
                 // If no file, assume we are receiving
@@ -228,8 +241,9 @@ tabBtns.forEach(btn => {
 dropZone.addEventListener('click', () => fileInput.click());
 
 fileInput.addEventListener('change', (e) => {
-    const file = e.target.files[0];
-    if (file) prepareToSend(file);
+    if (e.target.files.length > 0) {
+        prepareToSendBatch(Array.from(e.target.files));
+    }
 });
 
 dropZone.addEventListener('dragover', (e) => {
@@ -242,23 +256,27 @@ dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover
 dropZone.addEventListener('drop', (e) => {
     e.preventDefault();
     dropZone.classList.remove('dragover');
-    const file = e.dataTransfer.files[0];
-    if (file) prepareToSend(file);
+    if (e.dataTransfer.files.length > 0) {
+        prepareToSendBatch(Array.from(e.dataTransfer.files));
+    }
 });
 
-function prepareToSend(file) {
-    currentFileData = file;
-    fileNameText.textContent = file.name;
-    fileSizeText.textContent = formatBytes(file.size);
+function prepareToSendBatch(files) {
+    currentFiles = files;
+    const totalSize = files.reduce((acc, f) => acc + f.size, 0);
     
-    // Switch UI to show file is selected
+    fileNameText.textContent = files.length > 1 ? `${files.length} Files Selected` : files[0].name;
+    fileSizeText.textContent = formatBytes(totalSize);
+    
+    // Switch UI to show files are selected
     const dropZoneIcon = dropZone.querySelector('.drop-icon');
     const dropZoneText = dropZone.querySelector('p');
     
     if (dropZoneIcon && dropZoneText) {
         dropZoneIcon.setAttribute('data-lucide', 'check-circle-2');
         dropZoneIcon.className = 'drop-icon success-pulse';
-        dropZoneText.innerHTML = `Ready to send: <span class="gradient-text">${file.name}</span><br><small>${formatBytes(file.size)}</small>`;
+        const fileLabel = files.length > 1 ? `${files.length} Document(s)` : files[0].name;
+        dropZoneText.innerHTML = `Ready to send: <span class="gradient-text">${fileLabel}</span><br><small>${formatBytes(totalSize)}</small>`;
         lucide.createIcons();
     }
 
@@ -266,7 +284,7 @@ function prepareToSend(file) {
     if (targetId) {
         initiateSend(targetId);
     } else {
-        showToast("File ready. Share your ID or scan the QR code.");
+        showToast("Files ready. Share your ID or scan the QR code.");
     }
 }
 
@@ -288,7 +306,7 @@ function initiateSend(targetId) {
             radarContainer.classList.add('hidden');
             transferInfo.classList.remove('hidden');
             transferTitle.textContent = "Requesting Access...";
-            // Metadata is already sent via handleConnection's 'open' listener
+            // Metadata-batch is already sent via handleConnection's 'open' listener
         });
         
         conn.on('error', () => {
@@ -326,39 +344,43 @@ function initiateReceive(targetId) {
     }, 1500);
 }
 
-function sendFileData() {
+async function sendFileDataBatch() {
     transferZone.classList.remove('hidden');
     radarContainer.classList.add('hidden');
     transferInfo.classList.remove('hidden');
     transferTitle.textContent = "Optimizing Route...";
     
     // Simulate some "Connecting" time for aesthetics
-    setTimeout(() => {
-        transferTitle.textContent = "Sending Document...";
-        
-        const reader = new FileReader();
-        reader.onload = (event) => {
-            currentConn.send({
-                type: 'file',
-                buffer: event.target.result
+    setTimeout(async () => {
+        for (let i = 0; i < currentFiles.length; i++) {
+            const file = currentFiles[i];
+            transferTitle.textContent = `Sending (${i + 1}/${currentFiles.length}): ${file.name}`;
+            
+            const reader = new FileReader();
+            await new Promise((resolve) => {
+                reader.onload = (event) => {
+                    currentConn.send({
+                        type: 'file-part',
+                        index: i,
+                        name: file.name,
+                        buffer: event.target.result
+                    });
+                    
+                    const progress = Math.round(((i + 1) / currentFiles.length) * 100);
+                    updateProgress(progress);
+                    resolve();
+                };
+                reader.readAsArrayBuffer(file);
             });
-            updateProgress(100);
-            setTimeout(() => {
-                showSuccess(`"${currentFileData.name}" was sent successfully!`);
-                transferZone.classList.add('hidden');
-            }, 1000);
-        };
+            
+            // Short delay between files to ensure orderly transmission
+            await new Promise(r => setTimeout(r, 500));
+        }
         
-        // In a real high-perf app we'd use chunks, but for standard files this works
-        reader.readAsArrayBuffer(currentFileData);
-        
-        // Fake progress for visual feedback
-        let prog = 0;
-        const interval = setInterval(() => {
-            prog += 15;
-            if (prog >= 95) clearInterval(interval);
-            updateProgress(Math.min(prog, 95));
-        }, 300);
+        setTimeout(() => {
+            showSuccess(`${currentFiles.length} Document(s) sent successfully!`);
+            transferZone.classList.add('hidden');
+        }, 1000);
     }, 1500);
 }
 
@@ -370,10 +392,11 @@ function updateProgress(val) {
 // --- Receivers Actions ---
 acceptBtn.addEventListener('click', () => {
     incomingModal.classList.add('hidden');
-    transferTitle.textContent = "Receiving Document...";
+    transferTitle.textContent = `Receiving (1/${incomingFiles.length})...`;
     transferZone.classList.remove('hidden');
-    updateProgress(10);
+    updateProgress(0);
     
+    receivedBlobs = [];
     currentConn.send({ type: 'accept' });
 });
 
@@ -383,17 +406,72 @@ declineBtn.addEventListener('click', () => {
 });
 
 // --- UI Helpers ---
-function generateQR(id) {
+function updateQR() {
+    if (!myPeerId) return;
+    
     qrContainer.innerHTML = '';
+    let text = myPeerId;
+    let label = "Scan this QR code from another device";
+    const urlDisplay = document.getElementById('urlDisplay');
+
+    if (currentQrType === 'url') {
+        const baseUrl = window.location.origin + window.location.pathname;
+        text = baseUrl + '#' + myPeerId;
+        label = "Scan this to open site on another device";
+        urlDisplay.classList.remove('hidden');
+    } else {
+        urlDisplay.classList.add('hidden');
+    }
+
     new QRCode(qrContainer, {
-        text: id,
+        text: text,
         width: 160,
         height: 160,
         colorDark : "#0f172a",
         colorLight : "#ffffff",
         correctLevel : QRCode.CorrectLevel.H
     });
+
+    document.getElementById('qrLabel').textContent = label;
 }
+
+// Generate QR helper (legacy wrapper)
+function generateQR(id) {
+    myPeerId = id;
+    updateQR();
+}
+
+// Check for auto-connect in URL hash
+window.addEventListener('load', () => {
+    const hash = window.location.hash;
+    if (hash && hash.length > 1) {
+        const id = hash.substring(1);
+        if (id && id.length === 6) { // Basic length check for our 6-char IDs
+            targetIdInput.value = id;
+            tabBtns.forEach(b => b.classList.remove('active'));
+            tabContents.forEach(c => c.classList.remove('active'));
+            document.querySelector('[data-tab="receive"]').classList.add('active');
+            document.getElementById('receiveTab').classList.add('active');
+            
+            showToast("Auto-filled sender ID from link!");
+        }
+    }
+});
+
+// QR Toggle Listeners
+document.getElementById('qrIdBtn').addEventListener('click', () => {
+    currentQrType = 'id';
+    document.getElementById('qrIdBtn').classList.add('active');
+    document.getElementById('qrUrlBtn').classList.remove('active');
+    updateQR();
+});
+
+document.getElementById('qrUrlBtn').addEventListener('click', () => {
+    currentQrType = 'url';
+    document.getElementById('qrUrlBtn').classList.add('active');
+    document.getElementById('qrIdBtn').classList.remove('active');
+    updateQR();
+});
 
 function formatBytes(bytes, decimals = 2) {
     if (bytes === 0) return '0 Bytes';
@@ -406,7 +484,7 @@ function formatBytes(bytes, decimals = 2) {
 
 function showSuccess(msg, showDownload = false) {
     successMsgText.textContent = msg;
-    if (showDownload && receivedBlob) {
+    if (showDownload && receivedBlobs.length > 0) {
         downloadAgainBtn.classList.remove('hidden');
     } else {
         downloadAgainBtn.classList.add('hidden');
@@ -415,19 +493,19 @@ function showSuccess(msg, showDownload = false) {
 }
 
 downloadAgainBtn.addEventListener('click', () => {
-    if (receivedBlob) {
-        const url = URL.createObjectURL(receivedBlob);
+    receivedBlobs.forEach(item => {
+        const url = URL.createObjectURL(item.blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = currentFileName;
+        a.download = item.name;
         a.click();
         URL.revokeObjectURL(url);
-    }
+    });
 });
 
 closeSuccessBtn.addEventListener('click', () => {
     successModal.classList.add('hidden');
-    receivedBlob = null; // Clear blob after closing
+    receivedBlobs = []; // Clear blobs after closing
 });
 
 // Copy ID
@@ -440,7 +518,7 @@ document.getElementById('copyIdBtn').addEventListener('click', () => {
 connectBtn.addEventListener('click', () => {
     const targetId = targetIdInput.value.trim();
     if (targetId) {
-        if (currentFileData) {
+        if (currentFiles.length > 0) {
             initiateSend(targetId);
         } else {
             initiateReceive(targetId);

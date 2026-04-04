@@ -218,6 +218,56 @@ code {
     border: 1px solid var(--border);
 }
 
+.qr-toggle-container {
+    display: flex;
+    gap: 0.5rem;
+    background: rgba(15, 23, 42, 0.5);
+    padding: 0.35rem;
+    border-radius: 0.75rem;
+}
+
+.qr-toggle-btn {
+    border: none;
+    background: none;
+    color: var(--text-muted);
+    padding: 0.5rem 1rem;
+    border-radius: 0.5rem;
+    cursor: pointer;
+    font-size: 0.75rem;
+    font-weight: 600;
+    transition: all 0.3s ease;
+}
+
+.qr-toggle-btn.active {
+    background: var(--primary);
+    color: white;
+    box-shadow: 0 2px 8px rgba(99, 102, 241, 0.2);
+}
+
+.url-display {
+    text-align: center;
+    background: rgba(15, 23, 42, 0.4);
+    padding: 0.75rem 1rem;
+    border-radius: 0.75rem;
+    border: 1px solid var(--border);
+    max-width: 100%;
+}
+
+.url-display span {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    display: block;
+    margin-bottom: 0.25rem;
+}
+
+.url-display code {
+    font-size: 0.65rem;
+    padding: 0.25rem 0.5rem;
+    letter-spacing: 0;
+    word-break: break-all;
+    display: inline-block;
+}
+
 .qr-container {
     background: white;
     padding: 1rem;

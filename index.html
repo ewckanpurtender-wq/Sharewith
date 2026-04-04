@@ -66,14 +66,24 @@
                                 </button>
                             </div>
                         </div>
+
+                        <div class="qr-toggle-container">
+                            <button class="qr-toggle-btn active" id="qrIdBtn">Connection ID</button>
+                            <button class="qr-toggle-btn" id="qrUrlBtn">Site Location</button>
+                        </div>
                         
+                        <div id="urlDisplay" class="url-display hidden">
+                            <span class="url-label">App Location:</span>
+                            <code id="siteLocationCode">https://ewckanpurtender-wq.github.io/Sharewith/</code>
+                        </div>
+
                         <div class="qr-container" id="qrcode"></div>
-                        <p class="qr-label">Scan this QR code from another device</p>
+                        <p class="qr-label" id="qrLabel">Scan this QR code from another device</p>
 
                         <div class="file-drop-zone" id="dropZone">
                             <i data-lucide="file-plus" class="drop-icon"></i>
                             <p>Drag & Drop or <span class="browse-link">Browse</span></p>
-                            <input type="file" id="fileInput" hidden>
+                            <input type="file" id="fileInput" hidden multiple>
                         </div>
                     </div>
                 </div>
